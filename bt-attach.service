@@ -1,0 +1,11 @@
+[Unit]
+Description=Attach Bluetooth HCI UART on ttyS0
+After=sysinit.target
+Before=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/bt-attach.sh
+
+[Install]
+WantedBy=multi-user.target
