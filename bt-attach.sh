@@ -8,4 +8,4 @@ sleep 1
 /usr/bin/gpioset gpiochip2 27=1
 sleep 2
 
-exec /usr/bin/hciattach -s 115200 -n /dev/ttyS0 bcm43xx 460800 flow
+exec /usr/bin/hciattach -s 115200 -n /dev/ttyS0 bcm43xx 921600 flow
