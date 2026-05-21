@@ -102,7 +102,7 @@ Upgrading the kernel (e.g. `linux-image-edge-rockchip64` 22.08.8 → 24.8.3) rep
 ### Before upgrade — backup custom DTB
 
 ```bash
-sudo cp /boot/dtb/rockchip/rk3399-pinebook-pro.dtb /home/max/pinebook-pro-bt-fix/custom-dtb-backup.dtb
+sudo cp /boot/dtb/rockchip/rk3399-pinebook-pro.dtb ~/pinebook-pro-bt-fix/custom-dtb-backup.dtb
 ```
 
 ### Upgrade kernel
@@ -117,7 +117,7 @@ sudo reboot
 After reboot, BT will not work. Restore your DTB:
 
 ```bash
-sudo cp /home/max/pinebook-pro-bt-fix/custom-dtb-backup.dtb /boot/dtb/rockchip/rk3399-pinebook-pro.dtb
+sudo cp ~/pinebook-pro-bt-fix/custom-dtb-backup.dtb /boot/dtb/rockchip/rk3399-pinebook-pro.dtb
 ```
 
 The old DTB is fully compatible with the new kernel — DTBs don't need to match the kernel version for the same board.
@@ -340,14 +340,14 @@ The AP6255 BT module connects via UART rather than SDIO or USB. UART bandwidth i
 
 Doubles bandwidth from 460800 to 921600 baud (~46080 → ~92160 bytes/sec), increasing headroom from ~8% to ~54%.
 
-Edit `/home/max/pinebook-pro-bt-fix/bt-attach.sh`:
+Edit `~/pinebook-pro-bt-fix/bt-attach.sh`:
 ```bash
 exec /usr/bin/hciattach -s 115200 -n /dev/ttyS0 bcm43xx 921600 flow
 #                                                       ^^^^^^ was 460800
 ```
 Apply:
 ```bash
-sudo cp /home/max/pinebook-pro-bt-fix/bt-attach.sh /usr/local/bin/bt-attach.sh
+sudo cp ~/pinebook-pro-bt-fix/bt-attach.sh /usr/local/bin/bt-attach.sh
 sudo systemctl restart bt-attach
 # Re-pair:
 bluetoothctl remove <device-MAC>
