@@ -85,6 +85,27 @@ Three fixes applied (see full details below):
 
 With all fixes, stuttering is eliminated or greatly reduced even during CPU-intensive workloads (video playback, compilation, etc.).
 
+## Fixing Slow Boot / Reboot Hangs (PCIe)
+
+If you have no NVMe SSD installed, the PCIe controller probes the empty slot on every boot, adding 10-15s to kernel boot time (`PCIe link training gen1 timeout!`). It can also hang shutdown/reboot when the PCIe power domain fails to sequence down cleanly.
+
+**Fix:** Disable PCIe in the custom DTB.
+
+In `rk3399-pinebook-pro-nobt.dts`, change `pcie@f8000000` node:
+```diff
+-		status = "okay";
++		status = "disabled";
+```
+
+Recompile and install:
+```bash
+dtc -I dts -O dtb -o rk3399-pinebook-pro-nobt.dtb rk3399-pinebook-pro-nobt.dts
+sudo cp rk3399-pinebook-pro-nobt.dtb /boot/dtb/rockchip/rk3399-pinebook-pro.dtb
+sudo reboot
+```
+
+This drops kernel boot time from ~15s to ~3-5s and eliminates reboot hangs. Re-enable if you install an NVMe later.
+
 ## Restoring Original Configuration
 
 ```bash
