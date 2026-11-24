@@ -2,6 +2,38 @@
 
 Fixes non-functional Bluetooth on Armbian kernel 6.0.6-rockchip64 (and similar) for the Pinebook Pro's AP6255 WiFi/BT module (BCM4345C5).
 
+> ## ⚠️ Status 2026-11-24 — this workaround is obsolete, do not deploy it
+>
+> On Armbian **26.11.1 / kernel 7.3.3-edge-rockchip64** the kernel's own
+> `hci_uart_bcm` serdev driver works. The 6.0.6 NULL-deref is fixed upstream,
+> and nothing in this repo should be installed.
+>
+> What actually happened here: the Nov 10 update of
+> `linux-dtb-edge-rockchip64 26.11.1` **silently overwrote** the patched
+> `/boot/dtb/rockchip/rk3399-pinebook-pro.dtb` (no `.bak`). That restored the
+> stock DT — BT subnode enabled, PCIe enabled — and BT started working through
+> serdev. This is the regression predicted in `investigation_1.md` §2.7.
+>
+> Under the stock DT the old path cannot work at all:
+>
+> - UART0 is owned by serdev (`serial0-0` → `hci_uart_bcm`), so `/dev/ttyS0`
+>   does **not** exist and `hciattach` fails.
+> - The kernel owns the BT wake GPIOs, so `gpioset gpiochip0 9=0` returns
+>   `EINVAL`.
+> - `bt-attach.service` therefore failed on every boot.
+>
+> Current working setup (see `~/Downloads/boot-config.md` for detail):
+>
+> | item | state |
+> |---|---|
+> | DT | stock `linux-dtb-edge-rockchip64` — **never patch the DTB again** |
+> | BT firmware | `/usr/lib/firmware/brcm/BCM4345C0.hcd` symlink → `…0162…hcd`, kept by `/etc/tmpfiles.d/brcm-bt-firmware.conf` |
+> | BD address | a real OTP address (not `AA:AA:AA:AA:AA:AA`), readable once the patchram loads |
+> | `bt-attach.service` | disabled (files kept here as a fallback) |
+> | PCIe | disabled by a **user DT overlay**, not by editing this DTB |
+>
+> Everything below is kept as historical record of the 6.0.6 era.
+
 ## Problem
 
 The kernel's `hci_uart_bcm` serdev driver has a **NULL pointer dereference bug** that crashes when trying to change baud rate. On 6.0.6-rockchip64 the crash is at `hci_uart_setup+0xa8/0x180` and prevents any BT operation.
@@ -106,6 +138,16 @@ sudo reboot
 
 This drops kernel boot time from ~15s to ~3-5s and eliminates reboot hangs. Re-enable if you install an NVMe later.
 
+> **2026-11 update — use an overlay instead.** Copying a whole DTB into
+> `/boot/dtb/` is erased by every `linux-dtb-edge-rockchip64` upgrade. Since the
+> BT/PCIe fix is no longer needed, the surviving method is a user DT overlay
+> (`target-path = "/pcie@f8000000"`, `status = "disabled"`) in
+> `/boot/overlay-user/pcie-off.dts|.dtbo` plus `user_overlays=pcie-off` in
+> `/boot/armbianEnv.txt`. U-Boot applies it at boot and falls back to the
+> original DT if it fails. On this machine it removed both
+> `PCIe link training gen1 timeout!` messages and took kernel boot to 6.3 s.
+> Full procedure and revert are in `~/Downloads/boot-config.md`.
+
 ## Restoring Original Configuration
 
 ```bash
@@ -114,11 +156,36 @@ sudo systemctl disable bt-attach.service
 sudo reboot
 ```
 
+> On this machine there is **no** `.bak` — the 26.11.1 package update replaced
+> the DTB without one, and the stock DTB is the working configuration now. To
+> get the stock DTB back on any other machine, just reinstall the package:
+> `sudo apt install --reinstall linux-dtb-edge-rockchip64`.
+
 ---
 
 ## Kernel Upgrade Procedure
 
 Upgrading the kernel (e.g. `linux-image-edge-rockchip64` 22.08.8 → 24.8.3) replaces the DTB — your custom BT DTB will be **overwritten** and BT will stop working. The `bt-attach.sh` script and `bt-attach.service` are unaffected.
+
+> **2026-11 note:** on kernel 7.3.3 that overwrite is *harmless and actually
+> desirable* — it is what removed the old patched DTB and let serdev take over.
+> Do not restore a custom DTB after a kernel upgrade on 7.3.3+. Verify instead:
+>
+> ```bash
+> dmesg | grep -E "BCM4345C0|Patch"   # expect the 'Patch' line and a ... 0162 version line
+> bluetoothctl show | head -2         # expect a real OTP address, not AA:AA:AA:AA:AA:AA
+> ```
+>
+> If the firmware line reads `build 0000` with *Patch file not found*, recreate
+> the alias:
+>
+> ```bash
+> cd /usr/lib/firmware/brcm
+> sudo ln -sfn BCM4345C0_003.001.025.0162.0000_Generic_UART_37_4MHz_wlbga_ref_iLNA_iTR_eLG.hcd BCM4345C0.hcd
+> ```
+>
+> (`/etc/tmpfiles.d/brcm-bt-firmware.conf` does this automatically on this
+> machine.)
 
 ### Before upgrade — backup custom DTB
 
@@ -441,3 +508,5 @@ systemctl --user restart wireplumber pipewire pipewire-pulse
 pactl list cards | grep -E 'Active Profile|codec'
 # Should show:
 #   Active Profile: a2dp-sink
+```
+

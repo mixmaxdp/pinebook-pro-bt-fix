@@ -1,0 +1,3 @@
+# Build artifacts — compile these from the .dts sources instead of committing them
+*.dtb
+*.dtbo
