@@ -1,3 +1,6 @@
 # Build artifacts — compile these from the .dts sources instead of committing them
 *.dtb
 *.dtbo
+
+# ...except this one: the historical patched DTB is kept for reference
+!rk3399-pinebook-pro-nobt.dtb

@@ -55,7 +55,10 @@ Bypass the kernel driver entirely:
 |------|---------|
 | `bt-attach.sh` | Startup script — powers on chip, runs hciattach in foreground |
 | `bt-attach.service` | Systemd unit that runs `bt-attach.sh` at boot before bluetooth.service |
+| `50-rt-priority.conf` | Nice=-15 drop-in for hciattach |
 | `rk3399-pinebook-pro-nobt.dts` | Modified device tree source with BT disabled and uart-has-rtscts |
+| `rk3399-pinebook-pro-nobt.dtb` | Compiled form of the above, kept **for reference only** — do not install (see the PCIe section) |
+| `investigation_1.md` | Boot-log analysis that predicted the DTB-overwrite regression |
 
 ## Deployment
 
@@ -117,36 +120,102 @@ Three fixes applied (see full details below):
 
 With all fixes, stuttering is eliminated or greatly reduced even during CPU-intensive workloads (video playback, compilation, etc.).
 
-## Fixing Slow Boot / Reboot Hangs (PCIe)
+## Fixing Slow Boot / Reboot Hangs (PCIe) — historical, superseded
 
-If you have no NVMe SSD installed, the PCIe controller probes the empty slot on every boot, adding 10-15s to kernel boot time (`PCIe link training gen1 timeout!`). It can also hang shutdown/reboot when the PCIe power domain fails to sequence down cleanly.
+> ⚠️ **Superseded 2026-11-24 — do not copy a modified DTB into `/boot/dtb/`.**
+> Any `linux-dtb-edge-rockchip64` update silently replaces it. That is what
+> happened on the reference machine on 2026-11-10, and it is why the BT
+> workaround in this repo stopped working. The current method is a **user DT
+> overlay**, documented at the end of this section.
+>
+> The 6.0.6-era procedure is kept below as history. Both the source
+> (`rk3399-pinebook-pro-nobt.dts`) and the compiled binary
+> (`rk3399-pinebook-pro-nobt.dtb`) remain in this repo for reference, but
+> neither should be installed.
 
-**Fix:** Disable PCIe in the custom DTB.
+The underlying problem is real: with PCIe enabled and no NVMe fitted, the
+controller probes the empty slot on every boot, adding 10–15 s to kernel boot
+time (`PCIe link training gen1 timeout!`), and it can hang shutdown/reboot when
+the PCIe power domain fails to sequence down cleanly.
 
-In `rk3399-pinebook-pro-nobt.dts`, change `pcie@f8000000` node:
+### Original fix (6.0.6 era) — patch the DTB in place
+
+This worked at the time. It is described here to explain the history and the
+files in this repo, **not** as an installation procedure.
+
+In `rk3399-pinebook-pro-nobt.dts`, the `pcie@f8000000` node was changed:
+
 ```diff
 -		status = "okay";
 +		status = "disabled";
 ```
 
-Recompile and install:
+Then compiled and copied over the package DTB:
+
 ```bash
 dtc -I dts -O dtb -o rk3399-pinebook-pro-nobt.dtb rk3399-pinebook-pro-nobt.dts
-sudo cp rk3399-pinebook-pro-nobt.dtb /boot/dtb/rockchip/rk3399-pinebook-pro.dtb
-sudo reboot
+
+# historical — do not run:
+# sudo cp rk3399-pinebook-pro-nobt.dtb /boot/dtb/rockchip/rk3399-pinebook-pro.dtb
+# sudo reboot
 ```
 
-This drops kernel boot time from ~15s to ~3-5s and eliminates reboot hangs. Re-enable if you install an NVMe later.
+Reported result at the time: kernel boot went from ~15 s to ~3–5 s and the
+reboot hangs stopped. Two properties made the approach fragile:
 
-> **2026-11 update — use an overlay instead.** Copying a whole DTB into
-> `/boot/dtb/` is erased by every `linux-dtb-edge-rockchip64` upgrade. Since the
-> BT/PCIe fix is no longer needed, the surviving method is a user DT overlay
-> (`target-path = "/pcie@f8000000"`, `status = "disabled"`) in
-> `/boot/overlay-user/pcie-off.dts|.dtbo` plus `user_overlays=pcie-off` in
-> `/boot/armbianEnv.txt`. U-Boot applies it at boot and falls back to the
-> original DT if it fails. On this machine it removed both
-> `PCIe link training gen1 timeout!` messages and took kernel boot to 6.3 s.
-> Full procedure and revert are in `~/Downloads/boot-config.md`.
+- **It is overwritten without warning.** There is no `dpkg-divert`, no hook and
+  no `.bak` — the package just replaces the file. The machine then behaves
+  differently after what looks like an unrelated `apt upgrade`, with no trace
+  of why.
+- **It coupled two unrelated decisions.** The same DTB carried the BT
+  workaround *and* the PCIe change, so a DTB update silently altered both.
+
+### Current approach — user DT overlay
+
+A user DT overlay is a separate file in `/boot/overlay-user/`, referenced from
+`/boot/armbianEnv.txt`. It lives outside the package-managed DTB, so DTB updates
+cannot remove it, and it can be reverted by deleting one line.
+
+`/boot/overlay-user/pcie-off.dts`:
+
+```dts
+/dts-v1/;
+/plugin/;
+
+/ {
+	fragment@0 {
+		target-path = "/pcie@f8000000";
+		__overlay__ {
+			status = "disabled";
+		};
+	};
+};
+```
+
+Compile it, then point U-Boot at it:
+
+```bash
+sudo mkdir -p /boot/overlay-user
+sudo dtc -I dts -O dtb -o /boot/overlay-user/pcie-off.dtbo /boot/overlay-user/pcie-off.dts
+echo 'user_overlays=pcie-off' | sudo tee -a /boot/armbianEnv.txt
+```
+
+Check it against a **copy** of the DTB before rebooting:
+
+```bash
+fdtoverlay -i /boot/dtb/rockchip/rk3399-pinebook-pro.dtb \
+           -o /tmp/pcie-test.dtb /boot/overlay-user/pcie-off.dtbo
+fdtget -t s /tmp/pcie-test.dtb /pcie@f8000000 status   # -> disabled
+```
+
+`/boot/boot.scr` contains a `user_overlays` loop that applies these with
+`fdt apply`; on any failure it reloads the original DT and continues booting,
+so a bad overlay cannot brick the machine.
+
+Result on the reference machine: live DT `pcie@f8000000 = disabled`, zero
+`link training` messages (previously 2 per boot), kernel boot 7.2 s → 6.3 s.
+Remove the `user_overlays=pcie-off` line to re-enable PCIe if an NVMe is
+fitted. Full procedure and revert: `~/Downloads/boot-config.md`.
 
 ## Restoring Original Configuration
 
